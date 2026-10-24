@@ -1,4 +1,22 @@
-ATENÇÃO: O CONTEÚDO DO README FOI PRODUZIDO APÓS O PRAZO DE ENTREGA DO PDF PORTANTO NÃO DEVE SER INTERPRETADO COMO UMA FORMA DE SOBREPOR O PDF ESCRITO DE FORMA ALGUMA. FOI REDIGIDO PURAMENTE PARA O ANDAMENTO DO PROJETO.
+ATENÇÃO: ISTO NÃO DEVE SER INTERPRETADO COMO UMA FORMA DE SOBREPOR O PDF ESCRITO. FOI REDIGIDO PURAMENTE PARA O ANDAMENTO DO PROJETO.
+
+# Análise de vendas de videogames: Ocidente × Oriente
+
+## Equipe
+- Ozaeltton Matheus da Silva Medeiros (20231038060022)
+- Kauê Adriano dos Santos Dantas (20241038060007)
+
+**Repositório:** https://github.com/kaue0000/steam-sales-analysis
+
+## Justificativa e problemática
+
+Escolhemos o conjunto de dados **Video Game Sales**, que reúne vendas de videogames em diferentes plataformas (consoles, portáteis e PC) e as divide por região do mundo. Essa divisão permite comparar mercados com culturas e hábitos de consumo distintos.
+
+**Problemática:** como o perfil dos jogos mais vendidos, em termos de gênero, plataforma e publisher, difere entre o Ocidente e o Oriente?
+
+Para responder a isso, usamos como referência as três regiões em que o dataset divide as vendas: América do Norte, Europa e Japão. A partir delas, fazemos uma generalização em dois grandes grupos: **Ocidente** (América do Norte e Europa) e **Oriente** (Japão). Essa é uma simplificação assumida, já que o Japão não representa todo o Oriente e a coluna `Other_Sales` agrupa os demais países sem distinção.
+
+Como o dataset não possui variáveis como preço, avaliações da crítica ou orçamento, o projeto tem caráter **descritivo e comparativo**: buscamos identificar padrões e diferenças de preferência entre as regiões, sem afirmar relações de causa e efeito sobre o sucesso de vendas.
 
 ## Conjunto de dados: Video Game Sales
 
