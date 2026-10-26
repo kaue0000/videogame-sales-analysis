@@ -68,31 +68,31 @@ total_regioes = total_regioes[~sem_vendas]
 # construção (duas regiões somadas contra uma). Por isso o alvo usa a
 # participação do Japão nas vendas de cada jogo: mede se o jogo performa de
 # forma relativamente melhor no Oriente, independentemente do tamanho do mercado.
-data["East_participation"] = data["East_Sales"] / total_regioes
+data["Participacao_Oriente"] = data["East_Sales"] / total_regioes
 
-# Construção da variável-alvo (Market) a partir da participação do Japão nas vendas.
+# Construção da variável-alvo (Mercado) a partir da participação do Japão nas vendas.
 # Indica qual mercado o jogo vende mais: Ocidente, Oriente ou Equilibrado.
-data["Market"] = np.select(
+data["Mercado"] = np.select(
     [
-        data["East_participation"] < LIMIAR_OCIDENTE,
-        data["East_participation"] > LIMIAR_ORIENTE,
+        data["Participacao_Oriente"] < LIMIAR_OCIDENTE,
+        data["Participacao_Oriente"] > LIMIAR_ORIENTE,
     ],
-    ["West", "East"],
-    default="Balanced",
+    ["Ocidente", "Oriente"],
+    default="Equilibrado",
 )
 
 print("-" * 20 + "Distribuição da variável-alvo (Mercado)" + "-" * 20)
-print(data["Market"].value_counts())
-print(data["Market"].value_counts(normalize=True).round(3))
+print(data["Mercado"].value_counts())
+print(data["Mercado"].value_counts(normalize=True).round(3))
 # Classes desbalanceadas: nas próximas etapas usar validação cruzada
 # estratificada e métricas como F1 macro / acurácia balanceada.
 
 # As colunas de vendas e derivadas saem das características, evitando vazamento de informação.
 colunas_vendas = ["NA_Sales", "EU_Sales", "JP_Sales",
-                  "West_Sales", "East_Sales", "East_participation"]
+                  "West_Sales", "East_Sales", "Participacao_Oriente"]
 
-y = data["Market"]
-X = data.drop(columns=colunas_vendas + ["Market"])
+y = data["Mercado"]
+X = data.drop(columns=colunas_vendas + ["Mercado"])
 
 colunas_categoricas = ['Platform', 'Genre', 'Publisher']
 colunas_numericas = ['Year']
