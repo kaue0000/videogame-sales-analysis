@@ -1,18 +1,31 @@
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.impute import SimpleImputer
-from sklearn.model_selection import train_test_split
+from sklearn.decomposition import PCA
+from sklearn.cluster import KMeans, AgglomerativeClustering
+from sklearn.mixture import GaussianMixture
+from sklearn.metrics import (silhouette_score, davies_bouldin_score,
+                             adjusted_rand_score, normalized_mutual_info_score,
+                             homogeneity_completeness_v_measure)
 
-# Parâmetros da variável-alvo 
+# Parâmetros da variável-alvo
 # Participação do Japão nas vendas (NA + EU + JP) de cada jogo:
 # abaixo de LIMIAR_OCIDENTE -> "Ocidente"
 # acima de LIMIAR_ORIENTE   -> "Oriente"
 # entre os dois             -> "Equilibrado"
 LIMIAR_OCIDENTE = 0.10
 LIMIAR_ORIENTE = 0.50
+
+# Parâmetros do agrupamento
+SEED = 42
+N_COMPONENTES_PCA = 10        # componentes mantidas após o PCA
+K_MIN, K_MAX = 2, 8           # intervalo de k testado para escolher o nº de grupos
+N_AMOSTRA_HIERARQUICO = 5000  # o aglomerativo guarda a matriz de distâncias (memória
+                              # cresce com n²), por isso roda em uma amostra do dataset
 
 data = pd.read_csv('./vgsales.csv')
 
@@ -121,13 +134,148 @@ preprocessor = ColumnTransformer(
     ]
 )
 
-X_train, X_test, y_train, y_test = train_test_split(
-    X, y, test_size=0.2, random_state=42, stratify=y
-)
-
-X_train_proc = preprocessor.fit_transform(X_train)  # aprende só no treino
-X_test_proc = preprocessor.transform(X_test)        # apenas aplica no teste
+# Agrupamento (clusterização)
+# O agrupamento é não supervisionado: usa todos os jogos (sem divisão treino/teste)
+# e a coluna-alvo (Mercado) NÃO participa da formação dos grupos. Ela é usada
+# apenas no final, para comparar os grupos descobertos com a rotulação existente.
+X_proc = preprocessor.fit_transform(X)
+if hasattr(X_proc, "toarray"):  # o one-hot pode devolver matriz esparsa
+    X_proc = X_proc.toarray()
 
 print("-" * 20 + "Resultado do pré-processamento" + "-" * 20)
-print("Treino:", X_train_proc.shape, "| Teste:", X_test_proc.shape)
-print("Nº de colunas após codificação:", len(preprocessor.get_feature_names_out()))
+print("Dimensão:", X_proc.shape)
+
+# O PCA reduz as colunas geradas pelo one-hot, deixando as distâncias mais estáveis
+pca = PCA(n_components=min(N_COMPONENTES_PCA, X_proc.shape[1]), random_state=SEED)
+X_pca = pca.fit_transform(X_proc)
+print(f"Variância explicada pelo PCA: {pca.explained_variance_ratio_.sum():.2%}")
+
+# Escolha do número de grupos (K-Means): método do cotovelo e silhouette
+inercias = {}
+silhouettes = {}
+for k in range(K_MIN, K_MAX + 1):
+    kmeans = KMeans(n_clusters=k, n_init=10, random_state=SEED).fit(X_pca)
+    inercias[k] = kmeans.inertia_
+    silhouettes[k] = silhouette_score(X_pca, kmeans.labels_,
+                                      sample_size=5000, random_state=SEED)
+
+k_silhouette = max(silhouettes, key=silhouettes.get)
+k_alvo = y.nunique()  # nº de grupos igual ao nº de classes da variável-alvo
+
+print("-" * 20 + "Escolha do número de grupos" + "-" * 20)
+print("Silhouette por k:", {k: round(v, 3) for k, v in silhouettes.items()})
+print("k com maior silhouette:", k_silhouette)
+print("k igual ao nº de classes de Mercado:", k_alvo)
+
+fig, eixos = plt.subplots(1, 2, figsize=(10, 4))
+eixos[0].plot(list(inercias.keys()), list(inercias.values()), marker='o')
+eixos[0].set_title("Método do cotovelo (K-Means)")
+eixos[0].set_xlabel("k")
+eixos[0].set_ylabel("Inércia")
+eixos[1].plot(list(silhouettes.keys()), list(silhouettes.values()), marker='o', color='tab:orange')
+eixos[1].set_title("Silhouette (K-Means)")
+eixos[1].set_xlabel("k")
+eixos[1].set_ylabel("Silhouette")
+plt.tight_layout()
+plt.savefig("escolha_k.png", dpi=150)
+plt.show()
+
+# Amostra para o agrupamento hierárquico (os demais algoritmos usam todos os jogos)
+todos = np.arange(len(X_pca))
+amostra = np.sort(np.random.RandomState(SEED).choice(
+    todos, size=min(N_AMOSTRA_HIERARQUICO, len(todos)), replace=False))
+
+
+def aplicar_algoritmos(k):
+    """Executa os três algoritmos com k grupos. Devolve {nome: (índices usados, grupos)}."""
+    return {
+        "K-Means": (todos, KMeans(n_clusters=k, n_init=10, random_state=SEED).fit_predict(X_pca)),
+        "Aglomerativo (Ward)": (amostra, AgglomerativeClustering(
+            n_clusters=k, linkage="ward").fit_predict(X_pca[amostra])),
+        "GMM": (todos, GaussianMixture(n_components=k, covariance_type="full",
+                                       reg_covar=1e-4, random_state=SEED).fit_predict(X_pca)),
+    }
+
+
+def pureza(grupos, rotulo):
+    """Fração de jogos que pertencem à classe majoritária do seu grupo."""
+    tabela = pd.crosstab(grupos, rotulo)
+    return tabela.max(axis=1).sum() / tabela.values.sum()
+
+
+def avaliar(nome, k, indices, grupos):
+    """Métricas internas (qualidade dos grupos) e externas (concordância com Mercado)."""
+    rotulo = y.iloc[indices]
+    homogeneidade, completude, v_measure = homogeneity_completeness_v_measure(rotulo, grupos)
+    return {
+        "Algoritmo": nome,
+        "k": k,
+        "Jogos": len(indices),
+        "Silhouette": silhouette_score(X_pca[indices], grupos,
+                                       sample_size=5000, random_state=SEED),
+        "Davies-Bouldin": davies_bouldin_score(X_pca[indices], grupos),
+        "ARI": adjusted_rand_score(rotulo, grupos),
+        "NMI": normalized_mutual_info_score(rotulo, grupos),
+        "Homogeneidade": homogeneidade,
+        "Completude": completude,
+        "V-measure": v_measure,
+        "Pureza": pureza(grupos, rotulo),
+    }
+
+
+resultados = []
+grupos_por_k = {}
+for k in sorted({k_alvo, k_silhouette}):
+    grupos_por_k[k] = aplicar_algoritmos(k)
+    for nome, (indices, grupos) in grupos_por_k[k].items():
+        resultados.append(avaliar(nome, k, indices, grupos))
+
+comparativo = pd.DataFrame(resultados).round(3)
+
+# Referência para a pureza: sempre prever a classe majoritária de Mercado
+print("-" * 20 + "Pureza de referência (classe majoritária de Mercado)" + "-" * 20)
+print(round(y.value_counts(normalize=True).max(), 3))
+
+pd.set_option("display.width", 200)
+pd.set_option("display.max_columns", None)
+print("-" * 20 + "Comparativo entre os algoritmos" + "-" * 20)
+print(comparativo.to_string(index=False))
+
+# Comparação detalhada dos grupos com a rotulação existente (k = nº de classes)
+for nome, (indices, grupos) in grupos_por_k[k_alvo].items():
+    print("-" * 20 + f"{nome}: grupos x Mercado" + "-" * 20)
+    print(pd.crosstab(pd.Series(grupos, name="Grupo"), y.iloc[indices].values,
+                      rownames=["Grupo"], colnames=["Mercado"]))
+
+    # Perfil de cada grupo (vendas em milhões, participação do Japão e ano médio)
+    perfil = data.iloc[indices][["West_Sales", "East_Sales", "Participacao_Oriente", "Year"]]
+    perfil = perfil.groupby(grupos).mean().round(3)
+    perfil["Jogos"] = pd.Series(grupos).value_counts().sort_index()
+    print("Perfil médio de cada grupo:")
+    print(perfil)
+
+    # Categoria mais frequente de cada grupo
+    for coluna in colunas_categoricas:
+        print(f"{coluna} mais frequente por grupo:")
+        print(X.iloc[indices][coluna].groupby(grupos).agg(
+            lambda s: s.value_counts().index[0]))
+
+# Visualização: projeção nas duas primeiras componentes do PCA
+paineis = [("Mercado (rotulação existente)", y.values, todos)]
+for nome, (indices, grupos) in grupos_por_k[k_alvo].items():
+    paineis.append((nome, grupos, indices))
+
+fig, eixos = plt.subplots(2, 2, figsize=(12, 9))
+for eixo, (titulo, rotulos, indices) in zip(eixos.ravel(), paineis):
+    categorias = pd.Series(rotulos).astype(str)
+    for categoria in sorted(categorias.unique()):
+        mascara = (categorias == categoria).values
+        eixo.scatter(X_pca[indices][mascara, 0], X_pca[indices][mascara, 1],
+                     s=8, alpha=0.5, label=categoria)
+    eixo.set_title(titulo)
+    eixo.set_xlabel("PC1")
+    eixo.set_ylabel("PC2")
+    eixo.legend(fontsize=8)
+plt.tight_layout()
+plt.savefig("comparacao_grupos.png", dpi=150)
+plt.show()
