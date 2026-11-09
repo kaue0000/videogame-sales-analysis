@@ -15,7 +15,7 @@ from sklearn.model_selection import GridSearchCV, StratifiedKFold
 from sklearn.model_selection import train_test_split
 from sklearn.tree import DecisionTreeClassifier, plot_tree
 from sklearn.metrics import (accuracy_score, classification_report,
- confusion_matrix)
+ confusion_matrix, f1_score)
 from sklearn.model_selection import train_test_split
 from sklearn.model_selection import cross_val_score
 from sklearn.naive_bayes import GaussianNB
@@ -125,7 +125,7 @@ colunas_numericas = ['Year']
 # de colunas quase vazias.
 pipeline_categorico = Pipeline([
    ('imputer', SimpleImputer(strategy='constant', fill_value='Unknown')),
-   ('onehot', OneHotEncoder(handle_unknown='infrequent_if_exist', min_frequency=10)),
+   ('onehot', OneHotEncoder(handle_unknown='infrequent_if_exist', min_frequency=10, sparse_output=False)),
 ])
 
 # Numéricas: nulos viram a mediana; depois padronização.
@@ -285,15 +285,17 @@ plt.tight_layout()
 plt.savefig("comparacao_grupos.png", dpi=150)
 plt.show()
 
-# Árvore de decisão
-
+# Divisão treino/teste
 X_treino, X_teste, y_treino, y_teste = train_test_split(
     X, y, test_size=0.25, stratify=y, random_state=42
 )
 
-# O pré-processamento (one-hot nas categóricas) fica dentro do Pipeline:
-# a árvore só aceita números, e o preprocessor aprende apenas com o treino.
-modelo = Pipeline(steps=[
+cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+
+# Árvore de decisão
+# O pré-processamento fica dentro do Pipeline: aprende só com o treino
+# (e só com as dobras de treino durante a validação cruzada).
+modelo_arvore = Pipeline(steps=[
     ("preprocessamento", preprocessor),
     ("arvore", DecisionTreeClassifier(
         criterion="gini",
@@ -304,72 +306,134 @@ modelo = Pipeline(steps=[
     ))
 ])
 
-modelo.fit(X_treino, y_treino)
+modelo_arvore.fit(X_treino, y_treino)
+y_pred = modelo_arvore.predict(X_teste)
 
-y_pred = modelo.predict(X_teste)
-
+print("-" * 20 + "Árvore inicial (max_depth=4)" + "-" * 20)
 print("Acurácia:", accuracy_score(y_teste, y_pred))
-
 print("\nRelatório de classificação:")
 print(classification_report(y_teste, y_pred, zero_division=0))
-
 print("Matriz de confusão:")
-print(confusion_matrix(y_teste, y_pred, labels=modelo.classes_))
+print(confusion_matrix(y_teste, y_pred, labels=modelo_arvore.classes_))
 
-# Visualização da árvore
-arvore = modelo.named_steps["arvore"]
+# Visualização da árvore inicial
+# Os nomes das features vêm do pré-processador.
+arvore = modelo_arvore.named_steps["arvore"]
+nomes_features = modelo_arvore.named_steps["preprocessamento"].get_feature_names_out()
 
 plt.figure(figsize=(24, 12))
-
 plot_tree(
     arvore,
-    feature_names=preprocessor.get_feature_names_out(),
+    feature_names=nomes_features,
     class_names=list(arvore.classes_),  # Equilibrado, Ocidente, Oriente
     filled=True,
     rounded=True,
     proportion=True,
     impurity=False
 )
-
 plt.title("Árvore de decisão para previsão do mercado (Mercado)")
+plt.savefig("arvore_decisao.png", dpi=150)
 plt.show()
 
-parametros = {
+# Grid ampliado:
+# - min_samples_leaf inclui 3 e 5 (o melhor anterior foi 10, o menor valor testado)
+# - class_weight inclui None, para comparar a precisão da classe Equilibrado
+parametros_arvore = {
     "arvore__max_depth": [3, 4, 6, 8, 10, None],
-    "arvore__min_samples_leaf": [10, 30, 50],
+    "arvore__min_samples_leaf": [3, 5, 10, 30, 50],
     "arvore__criterion": ["gini", "entropy"],
+    "arvore__class_weight": ["balanced", None],
 }
 
-# Busca dos melhores parâmetros da árvore (só com os dados de treino)
-busca = GridSearchCV(
-    estimator=modelo,
-    param_grid=parametros,
+busca_arvore = GridSearchCV(
+    estimator=modelo_arvore,
+    param_grid=parametros_arvore,
     scoring="f1_macro",
-    cv=StratifiedKFold(n_splits=5, shuffle=True, random_state=42),
+    cv=cv,
     n_jobs=-1
 )
+busca_arvore.fit(X_treino, y_treino)
 
-busca.fit(X_treino, y_treino)
-
-print("Melhores parâmetros:", busca.best_params_)
-print("Melhor F1 macro na validação cruzada:", round(busca.best_score_, 4))
+print("-" * 20 + "Árvore: busca de hiperparâmetros" + "-" * 20)
+print("Melhores parâmetros:", busca_arvore.best_params_)
+print("Melhor F1 macro na validação cruzada:", round(busca_arvore.best_score_, 4))
 
 # O melhor modelo já vem treinado com todo o treino; o teste só é usado aqui
-melhor_modelo = busca.best_estimator_
-y_pred = melhor_modelo.predict(X_teste)
+melhor_arvore = busca_arvore.best_estimator_
+y_pred_arvore = melhor_arvore.predict(X_teste)
 
-print("Acurácia no teste:", accuracy_score(y_teste, y_pred))
-print(classification_report(y_teste, y_pred, zero_division=0))
-print(confusion_matrix(y_teste, y_pred, labels=melhor_modelo.classes_))
+print("Acurácia no teste:", accuracy_score(y_teste, y_pred_arvore))
+print(classification_report(y_teste, y_pred_arvore, zero_division=0))
+print(confusion_matrix(y_teste, y_pred_arvore, labels=melhor_arvore.classes_))
 
-# Validação cruzada do Pipeline completo (pré-processamento + árvore)
-cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+# Algoritmo Naive Bayes
+modelo_nb = Pipeline(steps=[
+    ("preprocessamento", preprocessor),
+    ("nb", GaussianNB())
+])
 
-scores = cross_val_score(modelo, X, y, cv=cv, scoring="f1_macro", n_jobs=-1)
+# Grid ampliado: o melhor anterior (0.1) era o maior valor testado
+parametros_nb = {
+    "nb__var_smoothing": [1e-9, 1e-5, 1e-3, 1e-1, 0.3, 0.5, 1, 2, 5]
+}
 
-print("F1 macro por dobra:", scores.round(4))
-print("Média:", round(scores.mean(), 4), "| Desvio padrão:", round(scores.std(), 4))
+busca_nb = GridSearchCV(
+    estimator=modelo_nb,
+    param_grid=parametros_nb,
+    scoring="f1_macro",
+    cv=cv,
+    n_jobs=-1
+)
+busca_nb.fit(X_treino, y_treino)
 
-# Algoritmo de Naive Bayes
-gnb = GaussianNB()
-y_pred = gnb.fit(X_treino, y_treino).predict(X_teste)
+print("-" * 20 + "Naive Bayes: busca de hiperparâmetros" + "-" * 20)
+print("Melhores parâmetros:", busca_nb.best_params_)
+print("Melhor F1 macro na validação cruzada:", round(busca_nb.best_score_, 4))
+
+melhor_nb = busca_nb.best_estimator_
+y_pred_nb = melhor_nb.predict(X_teste)
+
+print("Acurácia no teste:", accuracy_score(y_teste, y_pred_nb))
+print(classification_report(y_teste, y_pred_nb, zero_division=0))
+print(confusion_matrix(y_teste, y_pred_nb, labels=melhor_nb.classes_))
+
+# Validação cruzada 
+# O GridSearchCV roda DENTRO de cada dobra externa: os hiperparâmetros são
+# escolhidos só com o treino da dobra, e a avaliação usa a dobra de teste,
+# que não participou da escolha. Usa-se X, y completos (sem o split acima).
+cv_interna = StratifiedKFold(n_splits=3, shuffle=True, random_state=42)
+cv_externa = StratifiedKFold(n_splits=5, shuffle=True, random_state=7)
+
+busca_arvore_interna = GridSearchCV(
+    modelo_arvore, parametros_arvore, scoring="f1_macro", cv=cv_interna, n_jobs=-1
+)
+busca_nb_interna = GridSearchCV(
+    modelo_nb, parametros_nb, scoring="f1_macro", cv=cv_interna, n_jobs=-1
+)
+
+scores_arvore = cross_val_score(busca_arvore_interna, X, y, cv=cv_externa, scoring="f1_macro")
+scores_nb = cross_val_score(busca_nb_interna, X, y, cv=cv_externa, scoring="f1_macro")
+
+print("-" * 20 + "Validação cruzada aninhada (F1 macro)" + "-" * 20)
+print("Árvore por dobra:", scores_arvore.round(4),
+      "| Média:", round(scores_arvore.mean(), 4), "| DP:", round(scores_arvore.std(), 4))
+print("Naive Bayes por dobra:", scores_nb.round(4),
+      "| Média:", round(scores_nb.mean(), 4), "| DP:", round(scores_nb.std(), 4))
+
+# Tabela comparativa final
+comparacao = pd.DataFrame({
+    "Modelo": ["Árvore de decisão", "Naive Bayes"],
+    "F1 macro (grid, CV)": [busca_arvore.best_score_, busca_nb.best_score_],
+    "F1 macro (CV aninhada)": [scores_arvore.mean(), scores_nb.mean()],
+    "Acurácia (teste)": [
+        accuracy_score(y_teste, y_pred_arvore),
+        accuracy_score(y_teste, y_pred_nb),
+    ],
+    "F1 macro (teste)": [
+        f1_score(y_teste, y_pred_arvore, average="macro"),
+        f1_score(y_teste, y_pred_nb, average="macro"),
+    ],
+}).round(4)
+
+print("-" * 20 + "Comparativo final" + "-" * 20)
+print(comparacao.to_string(index=False))
