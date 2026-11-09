@@ -9,8 +9,14 @@ from sklearn.decomposition import PCA
 from sklearn.cluster import KMeans, AgglomerativeClustering
 from sklearn.mixture import GaussianMixture
 from sklearn.metrics import (silhouette_score, davies_bouldin_score,
-                             adjusted_rand_score, normalized_mutual_info_score,
-                             homogeneity_completeness_v_measure)
+                            adjusted_rand_score, normalized_mutual_info_score,
+                            homogeneity_completeness_v_measure)
+from sklearn.model_selection import GridSearchCV
+from sklearn.model_selection import train_test_split
+from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor, plot_tree
+from sklearn.metrics import (accuracy_score, classification_report,
+ confusion_matrix, mean_absolute_error, mean_squared_error,
+ r2_score)
 
 # Parâmetros da variável-alvo
 # Participação do Japão nas vendas (NA + EU + JP) de cada jogo:
@@ -25,7 +31,7 @@ SEED = 42
 N_COMPONENTES_PCA = 10        # componentes mantidas após o PCA
 K_MIN, K_MAX = 2, 8           # intervalo de k testado para escolher o nº de grupos
 N_AMOSTRA_HIERARQUICO = 5000  # o aglomerativo guarda a matriz de distâncias (memória
-                              # cresce com n²), por isso roda em uma amostra do dataset
+                             # cresce com n²), por isso roda em uma amostra do dataset
 
 data = pd.read_csv('./vgsales.csv')
 
@@ -86,12 +92,12 @@ data["Participacao_Oriente"] = data["East_Sales"] / total_regioes
 # Construção da variável-alvo (Mercado) a partir da participação do Japão nas vendas.
 # Indica qual mercado o jogo vende mais: Ocidente, Oriente ou Equilibrado.
 data["Mercado"] = np.select(
-    [
-        data["Participacao_Oriente"] < LIMIAR_OCIDENTE,
-        data["Participacao_Oriente"] > LIMIAR_ORIENTE,
-    ],
-    ["Ocidente", "Oriente"],
-    default="Equilibrado",
+   [
+       data["Participacao_Oriente"] < LIMIAR_OCIDENTE,
+       data["Participacao_Oriente"] > LIMIAR_ORIENTE,
+   ],
+   ["Ocidente", "Oriente"],
+   default="Equilibrado",
 )
 
 print("-" * 20 + "Distribuição da variável-alvo (Mercado)" + "-" * 20)
@@ -102,7 +108,7 @@ print(data["Mercado"].value_counts(normalize=True).round(3))
 
 # As colunas de vendas e derivadas saem das características, evitando vazamento de informação.
 colunas_vendas = ["NA_Sales", "EU_Sales", "JP_Sales",
-                  "West_Sales", "East_Sales", "Participacao_Oriente"]
+                 "West_Sales", "East_Sales", "Participacao_Oriente"]
 
 y = data["Mercado"]
 X = data.drop(columns=colunas_vendas + ["Mercado"])
@@ -115,23 +121,23 @@ colunas_numericas = ['Year']
 # Publisher) são agrupadas em uma categoria "infrequente" para evitar centenas
 # de colunas quase vazias.
 pipeline_categorico = Pipeline([
-    ('imputer', SimpleImputer(strategy='constant', fill_value='Unknown')),
-    ('onehot', OneHotEncoder(handle_unknown='infrequent_if_exist', min_frequency=10)),
+   ('imputer', SimpleImputer(strategy='constant', fill_value='Unknown')),
+   ('onehot', OneHotEncoder(handle_unknown='infrequent_if_exist', min_frequency=10)),
 ])
 
 # Numéricas: nulos viram a mediana; depois padronização.
 pipeline_numerico = Pipeline([
-    ('imputer', SimpleImputer(strategy='median')),
-    ('scaler', StandardScaler()),
+   ('imputer', SimpleImputer(strategy='median')),
+   ('scaler', StandardScaler()),
 ])
 
 # Este "preprocessor" pode ser usado dentro de um Pipeline com o classificador
 # nas próximas etapas, para ser reajustado a cada dobra da validação cruzada.
 preprocessor = ColumnTransformer(
-    transformers=[
-        ('cat', pipeline_categorico, colunas_categoricas),
-        ('num', pipeline_numerico, colunas_numericas),
-    ]
+   transformers=[
+       ('cat', pipeline_categorico, colunas_categoricas),
+       ('num', pipeline_numerico, colunas_numericas),
+   ]
 )
 
 # Agrupamento (clusterização)
@@ -140,7 +146,7 @@ preprocessor = ColumnTransformer(
 # apenas no final, para comparar os grupos descobertos com a rotulação existente.
 X_proc = preprocessor.fit_transform(X)
 if hasattr(X_proc, "toarray"):  # o one-hot pode devolver matriz esparsa
-    X_proc = X_proc.toarray()
+   X_proc = X_proc.toarray()
 
 print("-" * 20 + "Resultado do pré-processamento" + "-" * 20)
 print("Dimensão:", X_proc.shape)
@@ -154,10 +160,10 @@ print(f"Variância explicada pelo PCA: {pca.explained_variance_ratio_.sum():.2%}
 inercias = {}
 silhouettes = {}
 for k in range(K_MIN, K_MAX + 1):
-    kmeans = KMeans(n_clusters=k, n_init=10, random_state=SEED).fit(X_pca)
-    inercias[k] = kmeans.inertia_
-    silhouettes[k] = silhouette_score(X_pca, kmeans.labels_,
-                                      sample_size=5000, random_state=SEED)
+   kmeans = KMeans(n_clusters=k, n_init=10, random_state=SEED).fit(X_pca)
+   inercias[k] = kmeans.inertia_
+   silhouettes[k] = silhouette_score(X_pca, kmeans.labels_,
+                                     sample_size=5000, random_state=SEED)
 
 k_silhouette = max(silhouettes, key=silhouettes.get)
 k_alvo = y.nunique()  # nº de grupos igual ao nº de classes da variável-alvo
@@ -183,52 +189,48 @@ plt.show()
 # Amostra para o agrupamento hierárquico (os demais algoritmos usam todos os jogos)
 todos = np.arange(len(X_pca))
 amostra = np.sort(np.random.RandomState(SEED).choice(
-    todos, size=min(N_AMOSTRA_HIERARQUICO, len(todos)), replace=False))
-
+   todos, size=min(N_AMOSTRA_HIERARQUICO, len(todos)), replace=False))
 
 def aplicar_algoritmos(k):
-    """Executa os três algoritmos com k grupos. Devolve {nome: (índices usados, grupos)}."""
-    return {
-        "K-Means": (todos, KMeans(n_clusters=k, n_init=10, random_state=SEED).fit_predict(X_pca)),
-        "Aglomerativo (Ward)": (amostra, AgglomerativeClustering(
-            n_clusters=k, linkage="ward").fit_predict(X_pca[amostra])),
-        "GMM": (todos, GaussianMixture(n_components=k, covariance_type="full",
-                                       reg_covar=1e-4, random_state=SEED).fit_predict(X_pca)),
-    }
-
+   """Executa os três algoritmos com k grupos. Devolve {nome: (índices usados, grupos)}."""
+   return {
+       "K-Means": (todos, KMeans(n_clusters=k, n_init=10, random_state=SEED).fit_predict(X_pca)),
+       "Aglomerativo (Ward)": (amostra, AgglomerativeClustering(
+           n_clusters=k, linkage="ward").fit_predict(X_pca[amostra])),
+       "GMM": (todos, GaussianMixture(n_components=k, covariance_type="full",
+                                      reg_covar=1e-4, random_state=SEED).fit_predict(X_pca)),
+   }
 
 def pureza(grupos, rotulo):
-    """Fração de jogos que pertencem à classe majoritária do seu grupo."""
-    tabela = pd.crosstab(grupos, rotulo)
-    return tabela.max(axis=1).sum() / tabela.values.sum()
-
+   """Fração de jogos que pertencem à classe majoritária do seu grupo."""
+   tabela = pd.crosstab(grupos, rotulo)
+   return tabela.max(axis=1).sum() / tabela.values.sum()
 
 def avaliar(nome, k, indices, grupos):
-    """Métricas internas (qualidade dos grupos) e externas (concordância com Mercado)."""
-    rotulo = y.iloc[indices]
-    homogeneidade, completude, v_measure = homogeneity_completeness_v_measure(rotulo, grupos)
-    return {
-        "Algoritmo": nome,
-        "k": k,
-        "Jogos": len(indices),
-        "Silhouette": silhouette_score(X_pca[indices], grupos,
-                                       sample_size=5000, random_state=SEED),
-        "Davies-Bouldin": davies_bouldin_score(X_pca[indices], grupos),
-        "ARI": adjusted_rand_score(rotulo, grupos),
-        "NMI": normalized_mutual_info_score(rotulo, grupos),
-        "Homogeneidade": homogeneidade,
-        "Completude": completude,
-        "V-measure": v_measure,
-        "Pureza": pureza(grupos, rotulo),
-    }
-
+   """Métricas internas (qualidade dos grupos) e externas (concordância com Mercado)."""
+   rotulo = y.iloc[indices]
+   homogeneidade, completude, v_measure = homogeneity_completeness_v_measure(rotulo, grupos)
+   return {
+       "Algoritmo": nome,
+       "k": k,
+       "Jogos": len(indices),
+       "Silhouette": silhouette_score(X_pca[indices], grupos,
+                                      sample_size=5000, random_state=SEED),
+       "Davies-Bouldin": davies_bouldin_score(X_pca[indices], grupos),
+       "ARI": adjusted_rand_score(rotulo, grupos),
+       "NMI": normalized_mutual_info_score(rotulo, grupos),
+       "Homogeneidade": homogeneidade,
+       "Completude": completude,
+       "V-measure": v_measure,
+       "Pureza": pureza(grupos, rotulo),
+   }
 
 resultados = []
 grupos_por_k = {}
 for k in sorted({k_alvo, k_silhouette}):
-    grupos_por_k[k] = aplicar_algoritmos(k)
-    for nome, (indices, grupos) in grupos_por_k[k].items():
-        resultados.append(avaliar(nome, k, indices, grupos))
+   grupos_por_k[k] = aplicar_algoritmos(k)
+   for nome, (indices, grupos) in grupos_por_k[k].items():
+       resultados.append(avaliar(nome, k, indices, grupos))
 
 comparativo = pd.DataFrame(resultados).round(3)
 
@@ -243,39 +245,88 @@ print(comparativo.to_string(index=False))
 
 # Comparação detalhada dos grupos com a rotulação existente (k = nº de classes)
 for nome, (indices, grupos) in grupos_por_k[k_alvo].items():
-    print("-" * 20 + f"{nome}: grupos x Mercado" + "-" * 20)
-    print(pd.crosstab(pd.Series(grupos, name="Grupo"), y.iloc[indices].values,
-                      rownames=["Grupo"], colnames=["Mercado"]))
+   print("-" * 20 + f"{nome}: grupos x Mercado" + "-" * 20)
+   print(pd.crosstab(pd.Series(grupos, name="Grupo"), y.iloc[indices].values,
+                     rownames=["Grupo"], colnames=["Mercado"]))
 
-    # Perfil de cada grupo (vendas em milhões, participação do Japão e ano médio)
-    perfil = data.iloc[indices][["West_Sales", "East_Sales", "Participacao_Oriente", "Year"]]
-    perfil = perfil.groupby(grupos).mean().round(3)
-    perfil["Jogos"] = pd.Series(grupos).value_counts().sort_index()
-    print("Perfil médio de cada grupo:")
-    print(perfil)
+   # Perfil de cada grupo (vendas em milhões, participação do Japão e ano médio)
+   perfil = data.iloc[indices][["West_Sales", "East_Sales", "Participacao_Oriente", "Year"]]
+   perfil = perfil.groupby(grupos).mean().round(3)
+   perfil["Jogos"] = pd.Series(grupos).value_counts().sort_index()
+   print("Perfil médio de cada grupo:")
+   print(perfil)
 
-    # Categoria mais frequente de cada grupo
-    for coluna in colunas_categoricas:
-        print(f"{coluna} mais frequente por grupo:")
-        print(X.iloc[indices][coluna].groupby(grupos).agg(
-            lambda s: s.value_counts().index[0]))
+   # Categoria mais frequente de cada grupo
+   for coluna in colunas_categoricas:
+       print(f"{coluna} mais frequente por grupo:")
+       print(X.iloc[indices][coluna].groupby(grupos).agg(
+           lambda s: s.value_counts().index[0]))
 
 # Visualização: projeção nas duas primeiras componentes do PCA
 paineis = [("Mercado (rotulação existente)", y.values, todos)]
 for nome, (indices, grupos) in grupos_por_k[k_alvo].items():
-    paineis.append((nome, grupos, indices))
+   paineis.append((nome, grupos, indices))
 
 fig, eixos = plt.subplots(2, 2, figsize=(12, 9))
 for eixo, (titulo, rotulos, indices) in zip(eixos.ravel(), paineis):
-    categorias = pd.Series(rotulos).astype(str)
-    for categoria in sorted(categorias.unique()):
-        mascara = (categorias == categoria).values
-        eixo.scatter(X_pca[indices][mascara, 0], X_pca[indices][mascara, 1],
-                     s=8, alpha=0.5, label=categoria)
-    eixo.set_title(titulo)
-    eixo.set_xlabel("PC1")
-    eixo.set_ylabel("PC2")
-    eixo.legend(fontsize=8)
+   categorias = pd.Series(rotulos).astype(str)
+   for categoria in sorted(categorias.unique()):
+       mascara = (categorias == categoria).values
+       eixo.scatter(X_pca[indices][mascara, 0], X_pca[indices][mascara, 1],
+                    s=8, alpha=0.5, label=categoria)
+   eixo.set_title(titulo)
+   eixo.set_xlabel("PC1")
+   eixo.set_ylabel("PC2")
+   eixo.legend(fontsize=8)
 plt.tight_layout()
 plt.savefig("comparacao_grupos.png", dpi=150)
+plt.show()
+
+# Árvore de decisão
+
+X_treino, X_teste, y_treino, y_teste = train_test_split(
+    X, y, test_size=0.25, stratify=y, random_state=42
+)
+
+# O pré-processamento (one-hot nas categóricas) fica dentro do Pipeline:
+# a árvore só aceita números, e o preprocessor aprende apenas com o treino.
+modelo = Pipeline(steps=[
+    ("preprocessamento", preprocessor),
+    ("arvore", DecisionTreeClassifier(
+        criterion="gini",
+        max_depth=4,
+        min_samples_leaf=30,
+        class_weight="balanced",
+        random_state=42
+    ))
+])
+
+modelo.fit(X_treino, y_treino)
+
+y_pred = modelo.predict(X_teste)
+
+print("Acurácia:", accuracy_score(y_teste, y_pred))
+
+print("\nRelatório de classificação:")
+print(classification_report(y_teste, y_pred, zero_division=0))
+
+print("Matriz de confusão:")
+print(confusion_matrix(y_teste, y_pred, labels=modelo.classes_))
+
+# Visualização da árvore
+arvore = modelo.named_steps["arvore"]
+
+plt.figure(figsize=(24, 12))
+
+plot_tree(
+    arvore,
+    feature_names=preprocessor.get_feature_names_out(),
+    class_names=list(arvore.classes_),  # Equilibrado, Ocidente, Oriente
+    filled=True,
+    rounded=True,
+    proportion=True,
+    impurity=False
+)
+
+plt.title("Árvore de decisão para previsão do mercado (Mercado)")
 plt.show()
