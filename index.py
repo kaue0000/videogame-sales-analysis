@@ -13,12 +13,12 @@ from sklearn.metrics import (silhouette_score, davies_bouldin_score,
                             homogeneity_completeness_v_measure)
 from sklearn.model_selection import GridSearchCV, StratifiedKFold
 from sklearn.model_selection import train_test_split
-from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor, plot_tree
+from sklearn.tree import DecisionTreeClassifier, plot_tree
 from sklearn.metrics import (accuracy_score, classification_report,
- confusion_matrix, mean_absolute_error, mean_squared_error,
- r2_score)
+ confusion_matrix)
 from sklearn.model_selection import train_test_split
 from sklearn.model_selection import cross_val_score
+from sklearn.naive_bayes import GaussianNB
 
 
 # Parâmetros da variável-alvo
@@ -369,3 +369,7 @@ scores = cross_val_score(modelo, X, y, cv=cv, scoring="f1_macro", n_jobs=-1)
 
 print("F1 macro por dobra:", scores.round(4))
 print("Média:", round(scores.mean(), 4), "| Desvio padrão:", round(scores.std(), 4))
+
+# Algoritmo de Naive Bayes
+gnb = GaussianNB()
+y_pred = gnb.fit(X_treino, y_treino).predict(X_teste)
