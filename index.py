@@ -11,12 +11,15 @@ from sklearn.mixture import GaussianMixture
 from sklearn.metrics import (silhouette_score, davies_bouldin_score,
                             adjusted_rand_score, normalized_mutual_info_score,
                             homogeneity_completeness_v_measure)
-from sklearn.model_selection import GridSearchCV
+from sklearn.model_selection import GridSearchCV, StratifiedKFold
 from sklearn.model_selection import train_test_split
 from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor, plot_tree
 from sklearn.metrics import (accuracy_score, classification_report,
  confusion_matrix, mean_absolute_error, mean_squared_error,
  r2_score)
+from sklearn.model_selection import train_test_split
+from sklearn.model_selection import cross_val_score
+
 
 # Parâmetros da variável-alvo
 # Participação do Japão nas vendas (NA + EU + JP) de cada jogo:
@@ -330,3 +333,39 @@ plot_tree(
 
 plt.title("Árvore de decisão para previsão do mercado (Mercado)")
 plt.show()
+
+parametros = {
+    "arvore__max_depth": [3, 4, 6, 8, 10, None],
+    "arvore__min_samples_leaf": [10, 30, 50],
+    "arvore__criterion": ["gini", "entropy"],
+}
+
+# Busca dos melhores parâmetros da árvore (só com os dados de treino)
+busca = GridSearchCV(
+    estimator=modelo,
+    param_grid=parametros,
+    scoring="f1_macro",
+    cv=StratifiedKFold(n_splits=5, shuffle=True, random_state=42),
+    n_jobs=-1
+)
+
+busca.fit(X_treino, y_treino)
+
+print("Melhores parâmetros:", busca.best_params_)
+print("Melhor F1 macro na validação cruzada:", round(busca.best_score_, 4))
+
+# O melhor modelo já vem treinado com todo o treino; o teste só é usado aqui
+melhor_modelo = busca.best_estimator_
+y_pred = melhor_modelo.predict(X_teste)
+
+print("Acurácia no teste:", accuracy_score(y_teste, y_pred))
+print(classification_report(y_teste, y_pred, zero_division=0))
+print(confusion_matrix(y_teste, y_pred, labels=melhor_modelo.classes_))
+
+# Validação cruzada do Pipeline completo (pré-processamento + árvore)
+cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+
+scores = cross_val_score(modelo, X, y, cv=cv, scoring="f1_macro", n_jobs=-1)
+
+print("F1 macro por dobra:", scores.round(4))
+print("Média:", round(scores.mean(), 4), "| Desvio padrão:", round(scores.std(), 4))
